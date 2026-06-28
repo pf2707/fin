@@ -99,3 +99,37 @@ def test_simulator_price_floor():
     sim._step()
     for ticker in sim._prices:
         assert sim._prices[ticker] >= 0.01
+
+
+def test_simulator_add_ticker_starts_tracking():
+    """A newly added ticker is simulated and seeded into the price cache."""
+    from app.market.cache import price_cache
+
+    sim = Simulator()
+    sim.add_ticker("amd")  # lower-case to verify normalization
+    assert "AMD" in sim._tickers
+    assert "AMD" in sim._config
+    # Cholesky must stay consistent with the ticker list size.
+    assert sim._cholesky.shape == (len(sim._tickers), len(sim._tickers))
+    # Price was seeded immediately.
+    assert price_cache.get("AMD") is not None
+    # Stepping includes the new ticker without error.
+    sim._step()
+    assert sim._prices["AMD"] >= 0.01
+    price_cache._prices.clear()
+
+
+def test_simulator_add_existing_ticker_is_noop():
+    sim = Simulator()
+    n = len(sim._tickers)
+    sim.add_ticker("AAPL")
+    assert len(sim._tickers) == n
+
+
+def test_simulator_remove_ticker():
+    sim = Simulator()
+    sim.remove_ticker("AAPL")
+    assert "AAPL" not in sim._tickers
+    assert "AAPL" not in sim._config
+    assert sim._cholesky.shape == (len(sim._tickers), len(sim._tickers))
+    sim._step()  # still works after removal

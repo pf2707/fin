@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.chat import router as chat_router
 from app.database import init_db
+from app.market.interface import set_active_provider
 from app.market.provider import create_provider
 from app.market.stream import router as stream_router
 from app.portfolio import router as portfolio_router
@@ -23,9 +24,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     provider = create_provider()
     await provider.start()
+    set_active_provider(provider)
     start_snapshot_recorder()
     yield
     stop_snapshot_recorder()
+    set_active_provider(None)
     await provider.stop()
 
 
