@@ -158,3 +158,124 @@ async def test_pnl_calculation(client):
     # Current price == avg_cost == 150, so PnL should be 0
     assert pos["unrealized_pnl"] == 0.0
     assert pos["pnl_percent"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_pnl_gain_after_price_rise(client):
+    # Buy 10 @ 150
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "buy"},
+    )
+    # Price rises to 180
+    price_cache.update("AAPL", 180.0)
+
+    resp = await client.get("/api/portfolio")
+    pos = resp.json()["positions"][0]
+    # (180 - 150) * 10 = 300 unrealized gain; 20% up
+    assert pos["unrealized_pnl"] == 300.0
+    assert pos["pnl_percent"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_pnl_loss_after_price_drop(client):
+    # Buy 10 @ 150
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "buy"},
+    )
+    # Price drops to 120
+    price_cache.update("AAPL", 120.0)
+
+    resp = await client.get("/api/portfolio")
+    pos = resp.json()["positions"][0]
+    # (120 - 150) * 10 = -300 unrealized loss; -20%
+    assert pos["unrealized_pnl"] == -300.0
+    assert pos["pnl_percent"] == -20.0
+
+
+@pytest.mark.asyncio
+async def test_avg_cost_blends_across_buys(client):
+    # Buy 10 @ 150
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "buy"},
+    )
+    # Price rises to 250, buy 10 more
+    price_cache.update("AAPL", 250.0)
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "buy"},
+    )
+
+    resp = await client.get("/api/portfolio")
+    pos = resp.json()["positions"][0]
+    assert pos["quantity"] == 20
+    # Weighted avg: (10*150 + 10*250) / 20 = 200
+    assert pos["avg_cost"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_avg_cost_unchanged_by_partial_sell(client):
+    # Buy 10 @ 150
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "buy"},
+    )
+    # Sell 4 — avg cost of remaining shares must not change
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 4, "side": "sell"},
+    )
+
+    resp = await client.get("/api/portfolio")
+    pos = resp.json()["positions"][0]
+    assert pos["quantity"] == 6
+    assert pos["avg_cost"] == 150.0
+
+
+@pytest.mark.asyncio
+async def test_sell_at_loss_realizes_lower_proceeds(client):
+    # Buy 10 @ 150 = -1500 cash
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "buy"},
+    )
+    # Price drops to 100, sell all 10 = +1000 cash
+    price_cache.update("AAPL", 100.0)
+    resp = await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 10, "side": "sell"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["price"] == 100.0
+
+    resp = await client.get("/api/portfolio")
+    data = resp.json()
+    # 10000 - 1500 + 1000 = 9500 (realized $500 loss)
+    assert data["cash_balance"] == 9500.0
+    assert data["positions"] == []
+
+
+@pytest.mark.asyncio
+async def test_fractional_shares(client):
+    # Buy 2.5 shares @ 150 = 375
+    resp = await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 2.5, "side": "buy"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["quantity"] == 2.5
+
+    resp = await client.get("/api/portfolio")
+    data = resp.json()
+    assert data["cash_balance"] == 10000.0 - (2.5 * 150.0)
+    assert data["positions"][0]["quantity"] == 2.5
+
+    # Sell a fractional amount
+    await client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL", "quantity": 0.5, "side": "sell"},
+    )
+    resp = await client.get("/api/portfolio")
+    assert resp.json()["positions"][0]["quantity"] == 2.0
