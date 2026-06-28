@@ -1,14 +1,15 @@
-"""Tests for the GBM market data simulator."""
+"""Tests for the GBM market data simulator and market data providers."""
 
-import math
+import inspect
 
 import numpy as np
-import pytest
 
+from app.market.cache import PriceCache
+from app.market.interface import MarketDataProvider
+from app.market.massive import MassiveClient
+from app.market.provider import create_provider
 from app.market.simulator import (
     TICKER_CONFIG,
-    TECH_TICKERS,
-    FINANCE_TICKERS,
     _build_correlation_matrix,
     Simulator,
 )
@@ -99,3 +100,72 @@ def test_simulator_price_floor():
     sim._step()
     for ticker in sim._prices:
         assert sim._prices[ticker] >= 0.01
+
+
+# --- Provider interface conformance ---
+
+
+def test_simulator_conforms_to_interface():
+    """Simulator must be a MarketDataProvider with concrete start/stop."""
+    assert issubclass(Simulator, MarketDataProvider)
+    sim = Simulator()
+    assert isinstance(sim, MarketDataProvider)
+    assert inspect.iscoroutinefunction(sim.start)
+    assert inspect.iscoroutinefunction(sim.stop)
+
+
+def test_massive_client_conforms_to_interface(monkeypatch):
+    """MassiveClient must be a MarketDataProvider with concrete start/stop."""
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    assert issubclass(MassiveClient, MarketDataProvider)
+    client = MassiveClient(tickers=list(TICKER_CONFIG.keys()))
+    assert isinstance(client, MarketDataProvider)
+    assert inspect.iscoroutinefunction(client.start)
+    assert inspect.iscoroutinefunction(client.stop)
+
+
+# --- Provider selection by environment ---
+
+
+def test_provider_defaults_to_simulator(monkeypatch):
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    assert isinstance(create_provider(), Simulator)
+
+
+def test_provider_uses_massive_when_key_set(monkeypatch):
+    monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
+    assert isinstance(create_provider(), MassiveClient)
+
+
+def test_provider_treats_blank_key_as_simulator(monkeypatch):
+    monkeypatch.setenv("MASSIVE_API_KEY", "   ")
+    assert isinstance(create_provider(), Simulator)
+
+
+# --- Price cache exposes latest / previous / timestamp ---
+
+
+def test_cache_exposes_latest_previous_and_timestamp():
+    cache = PriceCache()
+    first = cache.update("AAPL", 190.0)
+    assert first.price == 190.0
+    assert first.previous_price == 190.0  # first update: prev == current
+    assert first.timestamp
+    assert first.direction == "flat"
+
+    second = cache.update("AAPL", 191.5)
+    assert second.price == 191.5
+    assert second.previous_price == 190.0
+    assert second.direction == "up"
+
+    third = cache.update("AAPL", 191.0)
+    assert third.direction == "down"
+
+
+def test_cache_get_and_get_all():
+    cache = PriceCache()
+    cache.update("AAPL", 190.0)
+    cache.update("GOOGL", 175.0)
+    assert cache.get("AAPL").price == 190.0
+    assert cache.get("MISSING") is None
+    assert {p.ticker for p in cache.get_all()} == {"AAPL", "GOOGL"}
