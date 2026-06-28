@@ -1,6 +1,10 @@
-"""Tests for the in-memory price cache."""
+"""Tests for the in-memory price cache and the SSE price stream."""
 
-from app.market.cache import PriceCache
+import asyncio
+import json
+
+from app.market.cache import PriceCache, price_cache
+from app.market.stream import _price_event_generator
 
 
 def test_update_and_get():
@@ -46,3 +50,33 @@ def test_update_stores_timestamp():
     entry = cache.get("AAPL")
     assert entry.timestamp is not None
     assert len(entry.timestamp) > 0
+
+
+async def _first_event_for(ticker):
+    """Drive the SSE generator until it yields an event for `ticker`."""
+    gen = _price_event_generator()
+    try:
+        async for event in gen:
+            assert event["event"] == "price"
+            payload = json.loads(event["data"])
+            if payload.get("ticker") == ticker:
+                return payload
+    finally:
+        await gen.aclose()
+    return None
+
+
+async def test_stream_yields_well_formed_events():
+    """The SSE generator pushes well-formed price events from the shared cache."""
+    # Populate the shared singleton cache the stream reads from.
+    price_cache.update("AAPL", 150.0)
+    price_cache.update("AAPL", 155.0)
+
+    payload = await asyncio.wait_for(_first_event_for("AAPL"), timeout=5)
+
+    # Each event carries ticker, price, previous price, timestamp, and direction.
+    assert payload["ticker"] == "AAPL"
+    assert payload["price"] == 155.0
+    assert payload["previous_price"] == 150.0
+    assert payload["direction"] == "up"
+    assert payload["timestamp"]
