@@ -4,10 +4,29 @@ import os
 
 os.environ["LLM_MOCK"] = "true"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.market.cache import price_cache
+
+_DEFAULT_TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "JPM", "V", "NFLX"]
+
+
+@pytest.fixture(autouse=True)
+def _seed_prices():
+    """Seed deterministic $150 prices so chat trades fill at a known market price.
+
+    The chat trade path now reads the live market price from the shared cache
+    (same as manual trades), so tests must seed it instead of relying on a
+    hardcoded placeholder.
+    """
+    price_cache._prices.clear()
+    for _t in _DEFAULT_TICKERS:
+        price_cache.update(_t, 150.0)
+    yield
+    price_cache._prices.clear()
 
 
 @pytest_asyncio.fixture
