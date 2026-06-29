@@ -42,26 +42,42 @@ test.describe("Watchlist CRUD", () => {
 test.describe("Trading", () => {
   test("buy shares: cash decreases and position appears", async ({ page }) => {
     await page.goto("/");
-    // Wait for prices to be available
-    await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
+    // Wait for a live SSE connection so the ticker has a market price
+    await expect(page.getByText("connected", { exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
 
-    // Look for a trade input or bar - implementation-dependent
-    const tradePanel = page.locator("[class*=Trade]").or(page.getByText("Trade"));
-    if (await tradePanel.isVisible()) {
-      // Trade panel exists - implementation-specific assertions would go here
-      await expect(tradePanel).toBeVisible();
-    }
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("AAPL");
+    await page.getByPlaceholder("Qty").fill("1");
+    await page.getByRole("button", { name: "BUY" }).click();
+
+    // Trade-bar confirmation shows the executed fill
+    await expect(page.getByText(/BUY 1 AAPL @ \$/i)).toBeVisible({
+      timeout: 10_000,
+    });
   });
 
   test("sell shares: cash increases and position updates", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("connected", { exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
 
-    // Placeholder for when trade execution is implemented
-    const tradePanel = page.locator("[class*=Trade]").or(page.getByText("Trade"));
-    if (await tradePanel.isVisible()) {
-      await expect(tradePanel).toBeVisible();
-    }
+    // Buy first so there is a position to sell
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("MSFT");
+    await page.getByPlaceholder("Qty").fill("2");
+    await page.getByRole("button", { name: "BUY" }).click();
+    await expect(page.getByText(/BUY 2 MSFT @ \$/i)).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // Then sell part of it
+    await page.getByPlaceholder("Ticker", { exact: true }).fill("MSFT");
+    await page.getByPlaceholder("Qty").fill("1");
+    await page.getByRole("button", { name: "SELL" }).click();
+    await expect(page.getByText(/SELL 1 MSFT @ \$/i)).toBeVisible({
+      timeout: 10_000,
+    });
   });
 });
 
@@ -122,20 +138,27 @@ test.describe("SSE resilience", () => {
   test("reconnects after disconnect", async ({ page }) => {
     await page.goto("/");
     // Wait for initial connection
-    await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
-
-    // Simulate disconnect by blocking the SSE endpoint
-    await page.route("**/api/stream/prices", (route) => route.abort());
-
-    // Should show reconnecting
-    await expect(page.getByText("reconnecting")).toBeVisible({
+    await expect(page.getByText("connected", { exact: true })).toBeVisible({
       timeout: 10_000,
     });
 
-    // Restore the route
+    // Block the SSE endpoint and reload so the new EventSource fails to connect
+    await page.route("**/api/stream/prices", (route) => route.abort());
+    await page.reload();
+
+    // App should report it is no longer connected
+    await expect(
+      page
+        .getByText("reconnecting", { exact: true })
+        .or(page.getByText("disconnected", { exact: true }))
+    ).toBeVisible({ timeout: 10_000 });
+
+    // Restore the endpoint — native EventSource auto-reconnects
     await page.unroute("**/api/stream/prices");
 
     // Should reconnect
-    await expect(page.getByText("connected")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("connected", { exact: true })).toBeVisible({
+      timeout: 20_000,
+    });
   });
 });

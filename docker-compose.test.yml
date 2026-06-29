@@ -10,7 +10,7 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -25,4 +25,4 @@ services:
     working_dir: /work
     volumes:
       - ./test:/work
-    command: npx playwright test
+    command: sh -c "npm install && npx playwright test"
